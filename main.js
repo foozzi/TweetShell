@@ -3,6 +3,9 @@ const {app, Menu, Tray, BrowserWindow, ipcMain} = require('electron')
 
 const path = require('path')
 const url = require('url')
+const teeny = require('teeny-conf');
+
+let config = new teeny('config.json');
 
 // Keep a global reference of the window object, if you don't, the window will
 // be closed automatically when the JavaScript object is garbage collected.
@@ -34,8 +37,8 @@ app.on('ready', () => {
 
 const createWindow = () => {
   window = new BrowserWindow({
-    width: 300,
-    height: 450,
+    width: 800,
+    height: 650,
     show: false,
     frame: false,
     fullscreenable: false,
@@ -49,6 +52,8 @@ const createWindow = () => {
   })
   window.loadURL(`file://${path.join(__dirname, 'index.html')}`)
 
+  window.webContents.openDevTools()
+
   // Hide the window when it loses focus
   window.on('blur', () => {
     if (!window.webContents.isDevToolsOpened()) {
@@ -57,9 +62,28 @@ const createWindow = () => {
   })
 }
 
+ipcMain.on('check-auth', (event) => {
+  config.loadOrCreateSync('tweetr');
+  if(config.get('auth') === undefined) {
+    event.sender.send('check-auth', {
+      error: 0,
+      auth: false
+    });
+  }
+  
+})
 
 ipcMain.on('show-window', () => {
   showWindow()
+})
+
+ipcMain.on('show-login-window', (event) => {
+  createLoginWindow(result => {
+    if(result.error === 0 && result.auth === true) {
+      toggleWindow()
+      event.sender.send('show-login-window', result);
+    }
+  })
 })
 
 function handleCallback (url, cb) {
@@ -69,10 +93,10 @@ function handleCallback (url, cb) {
   return cb({oauth_token:oauth_token_clear, oauth_verifier:oauth_verifier});
 }
 
-function createLoginWindow () {
+function createLoginWindow (cb) {
   authWindow = new BrowserWindow({width: 800, height: 600})
   authWindow.loadURL(url.format({
-    pathname: path.join(__dirname, 'index.html'),
+    pathname: path.join(__dirname, 'blank.html'),
     protocol: 'file:',
     slashes: true
   }))
@@ -80,7 +104,7 @@ function createLoginWindow () {
   var twitter = new twitterAPI({
       consumerKey: 'pqsBDT0nZKd4TjsmLtvJndmTJ',
       consumerSecret: '57V6LLrMu5rMSG2QfLYwBMn5etuvzBLBLVFjGzxkKzJxzr8ST1',
-      callback: 'http://localhost'
+      callback: 'http://localhost/tweetshell'
   });
   twitter.getRequestToken(function(error, requestToken, requestTokenSecret, results){
     if (error) {
@@ -89,23 +113,39 @@ function createLoginWindow () {
       authWindow.loadURL('https://twitter.com/oauth/authenticate?oauth_token='+requestToken);
     }
   });
-  mainWindow.on('close', function () {
+  authWindow.on('close', function () {
     authWindow.destroy();
   });
-  mainWindow.webContents.on('did-get-redirect-request', function (event, oldUrl, newUrl) {
+  authWindow.webContents.on('will-navigate', function (event, url) {
+    handleCallback(url, function(response){
+      config.loadOrCreateSync('tweetr');
+      config.set('auth', true);
+      config.set('oauth_token', response.oauth_token);
+      config.set('oauth_verifier', response.oauth_verifier);
+      authWindow.hide();
+      return cb({error: 0, auth: true});
+    });
+  });
+  authWindow.webContents.on('did-get-redirect-request', function (event, oldUrl, newUrl) {
+    console.log(response)
     handleCallback(newUrl, function(response){
       console.log(response)
     });
   });
   // Open the DevTools.
-  mainWindow.webContents.openDevTools()
+  // authWindow.webContents.openDevTools()
 
   // Emitted when the window is closed.
-  mainWindow.on('closed', function () {
+  authWindow.on('closed', function () {
     // Dereference the window object, usually you would store windows
     // in an array if your app supports multi windows, this is the time
     // when you should delete the corresponding element.
-    mainWindow = null
+    authWindow = null
+  })
+
+
+  authWindow.on('will-quit', function(event){
+    event.preventDefault()
   })
 }
 
@@ -152,6 +192,7 @@ app.on('window-all-closed', function () {
     app.quit()
   }
 })
+
 
 app.on('activate', function () {
   // On OS X it's common to re-create a window in the app when the
